@@ -8,6 +8,7 @@ This repository provides tools for visualizing the motion of a rigid body tracke
 datacollect/
 ├── data/
 ├── main.py                              # Main visualization script
+├── LICENSE
 └── README.md
 ```
 
