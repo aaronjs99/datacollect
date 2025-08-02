@@ -1,10 +1,11 @@
+import os
 import csv
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
-DATAFILE = "./data/Take 2025-05-14 05.25.51 PM.csv"
+DATAFILE = "./data/Heron_Test_01.csv"
 
 # Extract 'Name' row using csv.reader
 with open(DATAFILE, newline='') as f:
@@ -12,9 +13,11 @@ with open(DATAFILE, newline='') as f:
     for i in range(4):
         row = next(reader)
         if i == 3:
-            names_row = row  # This row contains marker names like "robot_link:Marker 001"
+            names_row = row  # This row contains marker names like "Heron:Marker 001"
 
 # Load numeric data
+if not os.path.exists(DATAFILE):
+    raise FileNotFoundError(f"Data file not found: {DATAFILE}")
 df = pd.read_csv(DATAFILE, skiprows=7)
 
 # Parse time
@@ -22,7 +25,7 @@ time = pd.to_numeric(df["Time (Seconds)"], errors="coerce")
 df = df.dropna(subset=["Time (Seconds)"]).reset_index(drop=True)
 time = time.values - time.values[0]  # Normalize to start at 0
 
-# Filter robot_link marker columns and remove duplicates
+# Filter Heron marker columns and remove duplicates
 seen = set()
 unique_triplets = []
 i = 0
@@ -31,10 +34,10 @@ while i < len(names_row) - 2:
     name = names_row[i]
     if (
         isinstance(name, str)
-        and name.startswith("robot_link:Marker")
+        and name.startswith("Heron:Marker")
         and i + 2 < len(df.columns)
     ):
-        marker_id = name  # full identifier (e.g. "robot_link:Marker 001")
+        marker_id = name  # full identifier (e.g. "Heron:Marker 001")
         if marker_id not in seen:
             seen.add(marker_id)
             triplet = [df.columns[i], df.columns[i+1], df.columns[i+2]]
@@ -85,5 +88,23 @@ ax.set_xlabel("X (mm)")
 ax.set_ylabel("Y (mm)")
 ax.set_zlabel("Z (mm)")
 ax.legend()
+# Equal aspect ratio
+xyz = np.concatenate([marker_trajectories.reshape(-1, 3), centers_of_mass])
+x_min, y_min, z_min = np.min(xyz, axis=0)
+x_max, y_max, z_max = np.max(xyz, axis=0)
+
+# Compute max range
+max_range = max(x_max - x_min, y_max - y_min, z_max - z_min)
+
+# Compute centers
+x_center = (x_max + x_min) / 2
+y_center = (y_max + y_min) / 2
+z_center = (z_max + z_min) / 2
+
+# Set limits to center the plot and make all axes equal
+ax.set_xlim(x_center - max_range / 2, x_center + max_range / 2)
+ax.set_ylim(y_center - max_range / 2, y_center + max_range / 2)
+ax.set_zlim(z_center - max_range / 2, z_center + max_range / 2)
+
 plt.tight_layout()
 plt.show()
