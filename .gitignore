@@ -1,5 +1,7 @@
 # User-specific files
-*.csv
+data/
+plots/
+
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
