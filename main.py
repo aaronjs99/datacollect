@@ -47,7 +47,6 @@ def load_marker_trajectories(df, names_row, marker_prefix):
 
     return np.array(marker_trajectories)
 
-
 def plot_trajectories(marker_trajectories, centers_of_mass, save_path=None):
     fig = plt.figure(figsize=(12, 6))
     ax = fig.add_subplot(111, projection='3d')
