@@ -534,16 +534,31 @@ class NatNetClient:
             raise NatNetError("NatNetClient.open() must be called before receiving frames")
 
         while True:
+            frame = self.recv_frame()
+            if frame is not None:
+                yield frame
+
+    def recv_frame(self) -> NatNetFrame | None:
+        if self.data_socket is None:
+            raise NatNetError("NatNetClient.open() must be called before receiving frames")
+
+        try:
             data, _ = self.data_socket.recvfrom(65535)
-            message_id, message = parse_natnet_message(
-                data,
-                version=self.version,
-                rigid_body_names=self.rigid_body_names,
-            )
-            if message_id == NAT_MODELDEF and isinstance(message, NatNetModelDefinitions):
-                self.rigid_body_names.update(message.rigid_body_names)
-            elif message_id == NAT_FRAMEOFDATA and isinstance(message, NatNetFrame):
-                yield message
+        except TimeoutError:
+            return None
+        except socket.timeout:
+            return None
+
+        message_id, message = parse_natnet_message(
+            data,
+            version=self.version,
+            rigid_body_names=self.rigid_body_names,
+        )
+        if message_id == NAT_MODELDEF and isinstance(message, NatNetModelDefinitions):
+            self.rigid_body_names.update(message.rigid_body_names)
+        elif message_id == NAT_FRAMEOFDATA and isinstance(message, NatNetFrame):
+            return message
+        return None
 
     def listen(self, callback: Callable[[NatNetFrame], None]) -> None:
         for frame in self.iter_frames():

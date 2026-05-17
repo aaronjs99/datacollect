@@ -11,6 +11,12 @@ from typing import Any
 
 SCHEMA = "datacollect.heron.v1"
 
+STATE_OK = "ok"
+STATE_MOTIVE_OFF = "motive_off"
+STATE_OBJECT_NOT_FOUND = "object_not_found"
+STATE_TRACKING_LOST = "tracking_lost"
+STATE_STARTUP_ERROR = "startup_error"
+
 
 class PacketValidationError(ValueError):
     """Raised when received JSON does not match the Heron packet contract."""
@@ -47,6 +53,30 @@ def _find_rigid_body(
         if getattr(rigid_body, "name", None) in names:
             return rigid_body
     return None
+
+
+def _status_dict(
+    *,
+    state: str,
+    motive_receiving: bool,
+    object_found: bool,
+    tracking_valid: bool,
+    heartbeat: bool,
+    message: str | None = None,
+    last_frame_age_ms: int | None = None,
+) -> dict[str, Any]:
+    status: dict[str, Any] = {
+        "state": state,
+        "flags": {
+            "motive_receiving": motive_receiving,
+            "object_found": object_found,
+            "tracking_valid": tracking_valid,
+            "heartbeat": heartbeat,
+        },
+        "message": message,
+        "last_frame_age_ms": last_frame_age_ms,
+    }
+    return status
 
 
 def _marker_label(marker: Any, body_name: str) -> str:
@@ -136,6 +166,7 @@ def build_heron_packet(
     """Build the public Heron packet from a parsed Motive/NatNet frame."""
 
     rigid_body = _find_rigid_body(frame, rigid_body_name, aliases, rigid_body_id)
+    object_found = rigid_body is not None
     tracking_valid = bool(rigid_body and getattr(rigid_body, "tracking_valid", False))
 
     rigid_body_packet: dict[str, Any] = {
@@ -160,17 +191,76 @@ def build_heron_packet(
         if _finite_number(mean_error):
             rigid_body_packet["mean_error_m"] = mean_error
 
+    if tracking_valid:
+        state = STATE_OK
+        message = "Heron rigid body is being tracked."
+    elif object_found:
+        state = STATE_TRACKING_LOST
+        message = "Heron rigid body is present but not currently tracking."
+    else:
+        state = STATE_OBJECT_NOT_FOUND
+        message = f"Rigid body {rigid_body_name!r} was not found in the latest Motive frame."
+
     return {
         "schema": SCHEMA,
         "device": device or socket.gethostname(),
         "frame": int(getattr(frame, "frame_number", 0)),
         "received_at_unix_ns": received_at_unix_ns if received_at_unix_ns is not None else time.time_ns(),
         "units": {"position": "m", "orientation": "quaternion_xyzw"},
+        "status": _status_dict(
+            state=state,
+            motive_receiving=True,
+            object_found=object_found,
+            tracking_valid=tracking_valid,
+            heartbeat=False,
+            message=message,
+        ),
         "heron": {
             "tracking_valid": tracking_valid,
             "rigid_body": rigid_body_packet,
             "markers": _collect_labeled_markers(frame, rigid_body, rigid_body_name),
             "potential_objects": _collect_unlabeled_markers(frame),
+        },
+    }
+
+
+def build_status_packet(
+    *,
+    state: str,
+    message: str,
+    rigid_body_name: str = "Heron",
+    rigid_body_id: int | None = None,
+    device: str | None = None,
+    frame: int | None = None,
+    received_at_unix_ns: int | None = None,
+    last_frame_age_ms: int | None = None,
+) -> dict[str, Any]:
+    motive_receiving = state not in {STATE_MOTIVE_OFF, STATE_STARTUP_ERROR}
+    return {
+        "schema": SCHEMA,
+        "device": device or socket.gethostname(),
+        "frame": frame,
+        "received_at_unix_ns": received_at_unix_ns if received_at_unix_ns is not None else time.time_ns(),
+        "units": {"position": "m", "orientation": "quaternion_xyzw"},
+        "status": _status_dict(
+            state=state,
+            motive_receiving=motive_receiving,
+            object_found=False,
+            tracking_valid=False,
+            heartbeat=True,
+            message=message,
+            last_frame_age_ms=last_frame_age_ms,
+        ),
+        "heron": {
+            "tracking_valid": False,
+            "rigid_body": {
+                "name": rigid_body_name,
+                "id": rigid_body_id,
+                "position_m": None,
+                "orientation_xyzw": None,
+            },
+            "markers": [],
+            "potential_objects": [],
         },
     }
 
@@ -192,6 +282,15 @@ def validate_packet(packet: Any) -> dict[str, Any]:
         raise PacketValidationError("heron.markers must be a list")
     if not isinstance(heron.get("potential_objects"), list):
         raise PacketValidationError("heron.potential_objects must be a list")
+
+    status = packet.get("status")
+    if status is not None:
+        if not isinstance(status, dict):
+            raise PacketValidationError("status must be an object")
+        if not isinstance(status.get("state"), str):
+            raise PacketValidationError("status.state must be a string")
+        if not isinstance(status.get("flags"), dict):
+            raise PacketValidationError("status.flags must be an object")
 
     units = packet.get("units")
     if not isinstance(units, dict) or units.get("position") != "m":

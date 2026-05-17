@@ -21,6 +21,7 @@ datacollect/
 ```
 
 The `data/` and `plots/` folders are local working folders and are git-ignored.
+The `.runtime/` folder is also ignored; the startup installer writes its launcher and log there.
 
 ## Install
 
@@ -43,6 +44,8 @@ Start the live Motive broadcaster:
 ```bash
 python run.py live --server-ip 127.0.0.1 --rigid-body Heron
 ```
+
+The live broadcaster is meant to stay running. It keeps sending heartbeat/status packets even when Motive is off or not streaming.
 
 Listen for Heron packets:
 
@@ -82,6 +85,33 @@ Optional receiver JSONL logging:
 python run.py receive --jsonl logs/heron_packets.jsonl
 ```
 
+## Background Startup
+
+On Windows, install the transmitter as a background scheduled task:
+
+```bash
+python run.py startup install -- --server-ip 127.0.0.1 --rigid-body Heron
+```
+
+This writes `.runtime/start_heron_broadcaster.cmd`, logs to `.runtime/heron_broadcaster.log`, and creates a Task Scheduler entry named `DataCollectHeronBroadcaster`. The default trigger is `boot` (`ONSTART`), which may require an elevated shell. Use `--trigger logon` for a per-user logon task:
+
+```bash
+python run.py startup install --trigger logon -- --server-ip 127.0.0.1 --rigid-body Heron
+```
+
+If Task Scheduler is locked down, use the no-admin Startup folder trigger:
+
+```bash
+python run.py startup install --trigger startup-folder -- --server-ip 127.0.0.1 --rigid-body Heron
+```
+
+Manage the task:
+
+```bash
+python run.py startup status
+python run.py startup uninstall
+```
+
 ## UDP Packet Shape
 
 ```json
@@ -91,6 +121,17 @@ python run.py receive --jsonl logs/heron_packets.jsonl
   "frame": 12345,
   "received_at_unix_ns": 0,
   "units": { "position": "m", "orientation": "quaternion_xyzw" },
+  "status": {
+    "state": "ok",
+    "flags": {
+      "motive_receiving": true,
+      "object_found": true,
+      "tracking_valid": true,
+      "heartbeat": false
+    },
+    "message": "Heron rigid body is being tracked.",
+    "last_frame_age_ms": null
+  },
   "heron": {
     "tracking_valid": true,
     "rigid_body": {
@@ -106,6 +147,14 @@ python run.py receive --jsonl logs/heron_packets.jsonl
 ```
 
 Positions are in meters. `markers` contains labeled `Heron:Marker ###` points. `potential_objects` contains unlabeled Motive point-cloud markers.
+
+Status states:
+
+- `ok`: Motive frames are arriving and Heron is tracked.
+- `motive_off`: no NatNet frame data has arrived within `--motive-timeout`.
+- `object_not_found`: Motive frames are arriving, but the configured rigid body is missing.
+- `tracking_lost`: the configured rigid body exists in the frame but is not valid/tracked.
+- `startup_error`: the background/live process could not create or use its NatNet sockets and will retry.
 
 ## Tests
 

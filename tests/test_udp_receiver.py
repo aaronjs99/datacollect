@@ -1,7 +1,7 @@
 import unittest
 
 from scripts.natnet import NatNetFrame, NatNetRigidBody
-from scripts.packet import build_heron_packet
+from scripts.packet import STATE_MOTIVE_OFF, build_heron_packet, build_status_packet
 from scripts.receiver import format_status
 from scripts.udp import UdpHeronReceiver, UdpJsonBroadcaster
 
@@ -51,8 +51,21 @@ class UdpReceiverTests(unittest.TestCase):
 
         status = format_status(packet, ("127.0.0.1", 5005))
 
-        self.assertIn("Heron x=1.0000", status)
+        self.assertIn("state=ok Heron x=1.0000", status)
         self.assertIn("from 127.0.0.1:5005", status)
+
+    def test_status_line_reports_motive_off(self):
+        packet = build_status_packet(
+            state=STATE_MOTIVE_OFF,
+            message="No NatNet frame data is being received from Motive.",
+            frame=34,
+            last_frame_age_ms=2001,
+        )
+
+        status = format_status(packet, ("127.0.0.1", 5005))
+
+        self.assertIn("state=motive_off", status)
+        self.assertIn("last_age_ms=2001", status)
 
 
 if __name__ == "__main__":

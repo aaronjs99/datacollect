@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import socket
 import sys
+import time
 
 from .natnet import (
     DEFAULT_COMMAND_PORT,
@@ -14,7 +15,7 @@ from .natnet import (
     NatNetClient,
     NatNetError,
 )
-from .packet import build_heron_packet
+from .packet import STATE_MOTIVE_OFF, STATE_STARTUP_ERROR, build_heron_packet, build_status_packet
 from .udp import UdpJsonBroadcaster
 
 
@@ -53,6 +54,29 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--broadcast-port", type=int, default=5005)
     parser.add_argument("--device", default=socket.gethostname(), help="Device name included in packets.")
     parser.add_argument(
+        "--heartbeat-interval",
+        type=float,
+        default=1.0,
+        help="Seconds between status packets when Motive is unavailable.",
+    )
+    parser.add_argument(
+        "--motive-timeout",
+        type=float,
+        default=2.0,
+        help="Seconds without NatNet frames before broadcasting motive_off.",
+    )
+    parser.add_argument(
+        "--retry-delay",
+        type=float,
+        default=2.0,
+        help="Seconds to wait before recreating NatNet sockets after a startup error.",
+    )
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="Reduce console output for Task Scheduler/background operation.",
+    )
+    parser.add_argument(
         "--no-modeldef-request",
         action="store_true",
         help="Skip the startup request for Motive model definitions.",
@@ -60,54 +84,133 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _last_frame_age_ms(last_frame_at: float | None) -> int | None:
+    if last_frame_at is None:
+        return None
+    return int((time.monotonic() - last_frame_at) * 1000)
+
+
+def _send_status(
+    broadcaster: UdpJsonBroadcaster,
+    args: argparse.Namespace,
+    *,
+    state: str,
+    message: str,
+    last_frame_at: float | None,
+    last_frame_number: int | None,
+) -> None:
+    packet = build_status_packet(
+        state=state,
+        message=message,
+        rigid_body_name=args.rigid_body,
+        rigid_body_id=args.rigid_body_id,
+        device=args.device,
+        frame=last_frame_number,
+        last_frame_age_ms=_last_frame_age_ms(last_frame_at),
+    )
+    broadcaster.send_packet(packet)
+
+
 def run_live(args: argparse.Namespace) -> None:
     frame_count = 0
-    with NatNetClient(
-        server_ip=args.server_ip,
-        local_ip=args.local_ip,
-        command_port=args.command_port,
-        data_port=args.data_port,
-        multicast_address=args.multicast_address,
-        connection_type=args.connection_type,
-        version=args.natnet_version,
-    ) as client, UdpJsonBroadcaster(args.broadcast_host, args.broadcast_port) as broadcaster:
-        if not args.no_modeldef_request:
-            model_defs = client.request_model_definitions(timeout=1.0)
-            if model_defs and model_defs.rigid_body_names:
-                names = ", ".join(
-                    f"{name}#{rigid_body_id}"
-                    for rigid_body_id, name in sorted(model_defs.rigid_body_names.items())
-                )
-                print(f"Loaded Motive rigid bodies: {names}")
-            else:
-                print(
-                    "No Motive model definitions received; use --rigid-body-id if names are unavailable.",
-                    file=sys.stderr,
-                )
+    last_frame_at: float | None = None
+    last_frame_number: int | None = None
+    last_status_at = 0.0
 
-        print(
-            f"Broadcasting {args.rigid_body} frames to "
-            f"{args.broadcast_host}:{args.broadcast_port}..."
-        )
-        for frame in client.iter_frames():
-            packet = build_heron_packet(
-                frame,
-                rigid_body_name=args.rigid_body,
-                aliases=tuple(args.alias or ()),
-                rigid_body_id=args.rigid_body_id,
-                device=args.device,
+    with UdpJsonBroadcaster(args.broadcast_host, args.broadcast_port) as broadcaster:
+        if not args.headless:
+            print(
+                f"Broadcasting {args.rigid_body} frames and status to "
+                f"{args.broadcast_host}:{args.broadcast_port}..."
             )
-            broadcaster.send_packet(packet)
-            frame_count += 1
-            if frame_count % 30 == 0:
-                heron = packet["heron"]
-                print(
-                    f"\rframe={packet['frame']} tracking={heron['tracking_valid']} "
-                    f"markers={len(heron['markers'])} "
-                    f"potential={len(heron['potential_objects'])}",
-                    end="",
-                    flush=True,
-                )
+
+        while True:
+            try:
+                with NatNetClient(
+                    server_ip=args.server_ip,
+                    local_ip=args.local_ip,
+                    command_port=args.command_port,
+                    data_port=args.data_port,
+                    multicast_address=args.multicast_address,
+                    connection_type=args.connection_type,
+                    version=args.natnet_version,
+                    timeout=min(args.heartbeat_interval, 1.0),
+                ) as client:
+                    if not args.no_modeldef_request:
+                        model_defs = client.request_model_definitions(timeout=1.0)
+                        if model_defs and model_defs.rigid_body_names:
+                            names = ", ".join(
+                                f"{name}#{rigid_body_id}"
+                                for rigid_body_id, name in sorted(model_defs.rigid_body_names.items())
+                            )
+                            if not args.headless:
+                                print(f"Loaded Motive rigid bodies: {names}")
+                        elif not args.headless:
+                            print(
+                                "No Motive model definitions received; waiting for frame data.",
+                                file=sys.stderr,
+                            )
+
+                    while True:
+                        frame = client.recv_frame()
+                        now = time.monotonic()
+                        if frame is None:
+                            timed_out = last_frame_at is None or (now - last_frame_at) >= args.motive_timeout
+                            if timed_out and (now - last_status_at) >= args.heartbeat_interval:
+                                _send_status(
+                                    broadcaster,
+                                    args,
+                                    state=STATE_MOTIVE_OFF,
+                                    message="No NatNet frame data is being received from Motive.",
+                                    last_frame_at=last_frame_at,
+                                    last_frame_number=last_frame_number,
+                                )
+                                last_status_at = now
+                                if not args.headless:
+                                    print("\rstate=motive_off waiting for Motive frame data".ljust(120), end="", flush=True)
+                            continue
+
+                        last_frame_at = now
+                        last_frame_number = frame.frame_number
+                        packet = build_heron_packet(
+                            frame,
+                            rigid_body_name=args.rigid_body,
+                            aliases=tuple(args.alias or ()),
+                            rigid_body_id=args.rigid_body_id,
+                            device=args.device,
+                        )
+                        broadcaster.send_packet(packet)
+                        frame_count += 1
+                        if frame_count % 30 == 0 and not args.headless:
+                            status = packet["status"]
+                            heron = packet["heron"]
+                            print(
+                                f"\rframe={packet['frame']} state={status['state']} "
+                                f"tracking={heron['tracking_valid']} "
+                                f"markers={len(heron['markers'])} "
+                                f"potential={len(heron['potential_objects'])}".ljust(120),
+                                end="",
+                                flush=True,
+                            )
+            except (NatNetError, OSError) as exc:
+                now = time.monotonic()
+                if (now - last_status_at) >= args.heartbeat_interval:
+                    _send_status(
+                        broadcaster,
+                        args,
+                        state=STATE_STARTUP_ERROR,
+                        message=f"NatNet startup error: {exc}",
+                        last_frame_at=last_frame_at,
+                        last_frame_number=last_frame_number,
+                    )
+                    last_status_at = now
+                    if not args.headless:
+                        print(
+                            f"\rstate=startup_error retrying in {args.retry_delay:.1f}s: {exc}".ljust(120),
+                            end="",
+                            flush=True,
+                        )
+                time.sleep(args.retry_delay)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -116,8 +219,6 @@ def main(argv: list[str] | None = None) -> None:
         run_live(args)
     except KeyboardInterrupt:
         print()
-    except (NatNetError, OSError) as exc:
-        raise SystemExit(f"Live Motive broadcaster failed: {exc}") from exc
 
 
 if __name__ == "__main__":

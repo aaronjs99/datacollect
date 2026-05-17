@@ -1,6 +1,7 @@
 # User-specific files
 data/
 plots/
+.runtime/
 
 
 # Byte-compiled / optimized / DLL files

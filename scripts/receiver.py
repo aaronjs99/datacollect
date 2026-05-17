@@ -14,19 +14,28 @@ from .udp import UdpHeronReceiver
 def format_status(packet: dict, address: tuple[str, int] | None = None) -> str:
     heron = packet["heron"]
     rigid_body = heron["rigid_body"]
+    packet_status = packet.get("status") or {}
+    state = packet_status.get("state", "unknown")
     source = f" from {address[0]}:{address[1]}" if address else ""
     marker_count = len(heron["markers"])
     potential_count = len(heron["potential_objects"])
 
+    if state in {"motive_off", "startup_error"}:
+        message = packet_status.get("message") or state
+        return (
+            f"frame={packet.get('frame')} state={state} {message} "
+            f"last_age_ms={packet_status.get('last_frame_age_ms')}{source}"
+        )
+
     if not heron["tracking_valid"] or rigid_body.get("position_m") is None:
         return (
-            f"frame={packet.get('frame')} Heron LOST "
+            f"frame={packet.get('frame')} state={state} Heron LOST "
             f"markers={marker_count} potential={potential_count}{source}"
         )
 
     position = rigid_body["position_m"]
     return (
-        f"frame={packet.get('frame')} Heron "
+        f"frame={packet.get('frame')} state={state} Heron "
         f"x={position['x']:.4f} y={position['y']:.4f} z={position['z']:.4f} "
         f"markers={marker_count} potential={potential_count}{source}"
     )

@@ -13,6 +13,7 @@ COMMANDS: dict[str, tuple[str, str, str]] = {
     "live": ("receive Motive/NatNet frames and broadcast Heron UDP JSON", "scripts.live", "main"),
     "receive": ("listen for Heron UDP JSON packets", "scripts.receiver", "main"),
     "plot": ("plot marker trajectories from an exported Motive CSV", "scripts.plot", "main"),
+    "startup": ("install or remove the Windows startup background transmitter", "scripts.startup", "main"),
 }
 
 
@@ -25,6 +26,7 @@ def _print_help() -> None:
     print("  python run.py live --server-ip 127.0.0.1 --rigid-body Heron")
     print("  python run.py receive --bind 0.0.0.0 --port 5005")
     print("  python run.py plot --file ./data/Heron_Test_01.csv --prefix Heron:Marker")
+    print("  python run.py startup install -- --server-ip 127.0.0.1 --rigid-body Heron")
     print("\nCommand help:")
     print("  python run.py <command> --help")
 
