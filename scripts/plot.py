@@ -1,10 +1,6 @@
-import os
-import csv
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 import argparse
+import csv
+import os
 
 
 def extract_names_row(filepath, name_row_idx=3):
@@ -17,6 +13,8 @@ def extract_names_row(filepath, name_row_idx=3):
 
 
 def load_marker_trajectories(df, names_row, marker_prefix):
+    import numpy as np
+
     seen = set()
     unique_triplets = []
     i = 0
@@ -31,7 +29,7 @@ def load_marker_trajectories(df, names_row, marker_prefix):
             marker_id = name
             if marker_id not in seen:
                 seen.add(marker_id)
-                triplet = [df.columns[i], df.columns[i+1], df.columns[i+2]]
+                triplet = [df.columns[i], df.columns[i + 1], df.columns[i + 2]]
                 unique_triplets.append(triplet)
             i += 3
         else:
@@ -47,7 +45,12 @@ def load_marker_trajectories(df, names_row, marker_prefix):
 
     return np.array(marker_trajectories)
 
+
 def plot_trajectories(marker_trajectories, centers_of_mass, save_path=None):
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+
     fig = plt.figure(figsize=(12, 6))
     ax = fig.add_subplot(111, projection='3d')
 
@@ -74,29 +77,33 @@ def plot_trajectories(marker_trajectories, centers_of_mass, save_path=None):
     center = np.mean(xyz, axis=0)
     max_range = np.ptp(xyz, axis=0).max()
 
-    ax.set_xlim(center[0] - max_range/2, center[0] + max_range/2)
-    ax.set_ylim(center[1] - max_range/2, center[1] + max_range/2)
-    ax.set_zlim(center[2] - max_range/2, center[2] + max_range/2)
+    ax.set_xlim(center[0] - max_range / 2, center[0] + max_range / 2)
+    ax.set_ylim(center[1] - max_range / 2, center[1] + max_range / 2)
+    ax.set_zlim(center[2] - max_range / 2, center[2] + max_range / 2)
 
     ax.plot([0], [0], [0], 'ko', label="Origin")
     ax.view_init(elev=30, azim=30, roll=105)
 
     plt.tight_layout()
     if save_path:
+        output_dir = os.path.dirname(save_path)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
         plt.savefig(save_path, dpi=300)
     plt.show()
 
 
-def main(datafile, marker_prefix="Heron:Marker", name_row_idx=3):
+def run_plot(datafile, marker_prefix="Heron:Marker", name_row_idx=3, save_path="./plots/trajectory_plot.png"):
+    import numpy as np
+    import pandas as pd
+
     if not os.path.exists(datafile):
         raise FileNotFoundError(f"Data file not found: {datafile}")
 
     names_row = extract_names_row(datafile, name_row_idx=name_row_idx)
     df = pd.read_csv(datafile, skiprows=7)
 
-    time = pd.to_numeric(df["Time (Seconds)"], errors="coerce")
     df = df.dropna(subset=["Time (Seconds)"]).reset_index(drop=True)
-    time = time.values - time.values[0]
 
     marker_trajectories = load_marker_trajectories(df, names_row, marker_prefix)
 
@@ -109,14 +116,23 @@ def main(datafile, marker_prefix="Heron:Marker", name_row_idx=3):
     marker_trajectories = marker_trajectories[:, valid_frames, :]
     centers_of_mass = centers_of_mass[valid_frames]
 
-    plot_trajectories(marker_trajectories, centers_of_mass, save_path="./plots/trajectory_plot.png")
+    plot_trajectories(marker_trajectories, centers_of_mass, save_path=save_path)
 
 
-if __name__ == "__main__":
+def build_arg_parser():
     parser = argparse.ArgumentParser(description="Plot 3D trajectories from OptiTrack CSV.")
     parser.add_argument("--file", type=str, default="./data/Heron_Test_01.csv", help="Path to CSV data file.")
     parser.add_argument("--prefix", type=str, default="Heron:Marker", help="Prefix for marker names.")
     parser.add_argument("--name_row", type=int, default=3, help="Index of the row with marker names (0-based).")
+    parser.add_argument("--output", type=str, default="./plots/trajectory_plot.png", help="Output image path.")
+    return parser
 
-    args = parser.parse_args()
-    main(args.file, marker_prefix=args.prefix, name_row_idx=args.name_row)
+
+def main(argv=None):
+    parser = build_arg_parser()
+    args = parser.parse_args(argv)
+    run_plot(args.file, marker_prefix=args.prefix, name_row_idx=args.name_row, save_path=args.output)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,55 +1,118 @@
-# Data Collection from OptiTrack Motion Capture Cameras
+# DataCollect
 
-This repository provides tools for visualizing the motion of a rigid body tracked by an optical motion capture system. It reads CSV data exported from Motive, extracts `robot_link` marker trajectories, computes the center of mass (CoM), and renders a 3D plot with initial and final configurations outlined.
+DataCollect bridges OptiTrack Motive data into a small LAN-friendly Heron state stream. It can:
 
-## Structure
+- receive live Motive/NatNet frames and broadcast Heron pose/points as UDP JSON
+- receive and inspect that UDP JSON stream from another process or machine
+- plot marker trajectories from exported Motive CSV files
 
-```
+All implementation code lives in `scripts/`. Use `run.py` from the repo root as the main entrypoint.
+
+## Layout
+
+```text
 datacollect/
-├── data/
-├── main.py                              # Main visualization script
-├── LICENSE
-└── README.md
+  run.py              # command dispatcher
+  scripts/            # live, receive, NatNet, UDP, packet, and plot code
+  tests/              # unit and local UDP integration tests
+  README.md
+  LICENSE
+  requirements.txt
 ```
 
-## Usage
+The `data/` and `plots/` folders are local working folders and are git-ignored.
 
-Make sure your CSV file is placed in the `./data/` directory. Then run:
+## Install
 
 ```bash
-python main.py
+pip install -r requirements.txt
 ```
 
-## Features
+The live UDP/NatNet tools use only the Python standard library. CSV plotting uses `numpy`, `pandas`, and `matplotlib`.
 
-- Parses and filters only `robot_link:Marker` columns
-- Removes duplicated markers
-- Computes center of mass across frames
-- Visualizes:
-  - Marker trajectories
-  - Center of Mass trajectory
-  - Polygon mesh at the initial and final marker positions
+## Run
 
-## Dependencies
-
-Make sure the following Python libraries are installed:
+Show the root command menu:
 
 ```bash
-pip install pandas numpy matplotlib
+python run.py --help
 ```
 
-## Output Example
+Start the live Motive broadcaster:
 
-- Each marker trajectory is drawn in a light color.
-- The CoM is shown in black.
-- Start shape (polygon): green
-- End shape (polygon): red
+```bash
+python run.py live --server-ip 127.0.0.1 --rigid-body Heron
+```
 
-## Notes
+Listen for Heron packets:
 
-- CSV format must follow Motive’s export style with metadata in the first few rows.
-- Only `robot_link:Marker` entries are used to compute rigid body motion.
+```bash
+python run.py receive --bind 0.0.0.0 --port 5005
+```
+
+Plot an exported Motive CSV:
+
+```bash
+python run.py plot --file ./data/Heron_Test_01.csv --prefix "Heron:Marker"
+```
+
+## Motive Setup
+
+Enable Motive streaming before running the live broadcaster:
+
+- Broadcast Frame Data: enabled
+- Stream Rigid Bodies: enabled
+- Stream Markers / labeled markers: enabled if marker points are needed
+- NatNet command port: `1510`
+- NatNet data port: `1511`
+
+By default, the broadcaster receives NatNet multicast data and sends one UDP JSON packet per Motive frame to `255.255.255.255:5005`.
+
+Useful live options:
+
+```bash
+python run.py live --help
+python run.py live --connection-type unicast --local-ip 192.168.1.20 --server-ip 192.168.1.10
+python run.py live --rigid-body Heron --rigid-body-id 17
+```
+
+Optional receiver JSONL logging:
+
+```bash
+python run.py receive --jsonl logs/heron_packets.jsonl
+```
+
+## UDP Packet Shape
+
+```json
+{
+  "schema": "datacollect.heron.v1",
+  "device": "SRILab-Desktop",
+  "frame": 12345,
+  "received_at_unix_ns": 0,
+  "units": { "position": "m", "orientation": "quaternion_xyzw" },
+  "heron": {
+    "tracking_valid": true,
+    "rigid_body": {
+      "name": "Heron",
+      "id": 17,
+      "position_m": { "x": 0.0, "y": 0.0, "z": 0.0 },
+      "orientation_xyzw": { "x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0 }
+    },
+    "markers": [],
+    "potential_objects": []
+  }
+}
+```
+
+Positions are in meters. `markers` contains labeled `Heron:Marker ###` points. `potential_objects` contains unlabeled Motive point-cloud markers.
+
+## Tests
+
+```bash
+python -m unittest discover -v
+```
 
 ## License
 
-MIT License (2025) – Aaron John Sabu
+MIT License. Copyright (c) 2026 Aaron John Sabu.
