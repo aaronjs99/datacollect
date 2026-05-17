@@ -1,7 +1,7 @@
 import unittest
 
 from scripts.natnet import NatNetFrame, NatNetRigidBody
-from scripts.packet import STATE_MOTIVE_OFF, build_heron_packet, build_status_packet
+from scripts.packet import STATE_MOTIVE_OFF, STATE_NO_FRAME_DATA, build_heron_packet, build_status_packet
 from scripts.receiver import format_status
 from scripts.udp import UdpHeronReceiver, UdpJsonBroadcaster
 
@@ -66,6 +66,18 @@ class UdpReceiverTests(unittest.TestCase):
 
         self.assertIn("state=motive_off", status)
         self.assertIn("last_age_ms=2001", status)
+
+    def test_status_line_reports_reachable_motive_without_frames(self):
+        packet = build_status_packet(
+            state=STATE_NO_FRAME_DATA,
+            message="Motive is reachable, but no frame data is being received.",
+            motive_reachable=True,
+        )
+
+        status = format_status(packet, ("127.0.0.1", 5005))
+
+        self.assertIn("state=no_frame_data", status)
+        self.assertIn("Motive is reachable", status)
 
 
 if __name__ == "__main__":

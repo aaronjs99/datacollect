@@ -20,7 +20,7 @@ def format_status(packet: dict, address: tuple[str, int] | None = None) -> str:
     marker_count = len(heron["markers"])
     potential_count = len(heron["potential_objects"])
 
-    if state in {"motive_off", "startup_error"}:
+    if state in {"motive_off", "no_frame_data", "startup_error"}:
         message = packet_status.get("message") or state
         return (
             f"frame={packet.get('frame')} state={state} {message} "

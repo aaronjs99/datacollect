@@ -13,6 +13,7 @@ SCHEMA = "datacollect.heron.v1"
 
 STATE_OK = "ok"
 STATE_MOTIVE_OFF = "motive_off"
+STATE_NO_FRAME_DATA = "no_frame_data"
 STATE_OBJECT_NOT_FOUND = "object_not_found"
 STATE_TRACKING_LOST = "tracking_lost"
 STATE_STARTUP_ERROR = "startup_error"
@@ -58,6 +59,7 @@ def _find_rigid_body(
 def _status_dict(
     *,
     state: str,
+    motive_reachable: bool,
     motive_receiving: bool,
     object_found: bool,
     tracking_valid: bool,
@@ -68,6 +70,7 @@ def _status_dict(
     status: dict[str, Any] = {
         "state": state,
         "flags": {
+            "motive_reachable": motive_reachable,
             "motive_receiving": motive_receiving,
             "object_found": object_found,
             "tracking_valid": tracking_valid,
@@ -209,6 +212,7 @@ def build_heron_packet(
         "units": {"position": "m", "orientation": "quaternion_xyzw"},
         "status": _status_dict(
             state=state,
+            motive_reachable=True,
             motive_receiving=True,
             object_found=object_found,
             tracking_valid=tracking_valid,
@@ -234,8 +238,11 @@ def build_status_packet(
     frame: int | None = None,
     received_at_unix_ns: int | None = None,
     last_frame_age_ms: int | None = None,
+    motive_reachable: bool | None = None,
 ) -> dict[str, Any]:
-    motive_receiving = state not in {STATE_MOTIVE_OFF, STATE_STARTUP_ERROR}
+    motive_receiving = state not in {STATE_MOTIVE_OFF, STATE_NO_FRAME_DATA, STATE_STARTUP_ERROR}
+    if motive_reachable is None:
+        motive_reachable = state not in {STATE_MOTIVE_OFF, STATE_STARTUP_ERROR}
     return {
         "schema": SCHEMA,
         "device": device or socket.gethostname(),
@@ -244,6 +251,7 @@ def build_status_packet(
         "units": {"position": "m", "orientation": "quaternion_xyzw"},
         "status": _status_dict(
             state=state,
+            motive_reachable=motive_reachable,
             motive_receiving=motive_receiving,
             object_found=False,
             tracking_valid=False,

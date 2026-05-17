@@ -15,7 +15,13 @@ from .natnet import (
     NatNetClient,
     NatNetError,
 )
-from .packet import STATE_MOTIVE_OFF, STATE_STARTUP_ERROR, build_heron_packet, build_status_packet
+from .packet import (
+    STATE_MOTIVE_OFF,
+    STATE_NO_FRAME_DATA,
+    STATE_STARTUP_ERROR,
+    build_heron_packet,
+    build_status_packet,
+)
 from .udp import UdpJsonBroadcaster
 
 
@@ -63,7 +69,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--motive-timeout",
         type=float,
         default=2.0,
-        help="Seconds without NatNet frames before broadcasting motive_off.",
+        help="Seconds without NatNet frames before broadcasting motive_off/no_frame_data.",
     )
     parser.add_argument(
         "--retry-delay",
@@ -98,6 +104,7 @@ def _send_status(
     message: str,
     last_frame_at: float | None,
     last_frame_number: int | None,
+    motive_reachable: bool | None = None,
 ) -> None:
     packet = build_status_packet(
         state=state,
@@ -107,6 +114,7 @@ def _send_status(
         device=args.device,
         frame=last_frame_number,
         last_frame_age_ms=_last_frame_age_ms(last_frame_at),
+        motive_reachable=motive_reachable,
     )
     broadcaster.send_packet(packet)
 
@@ -116,6 +124,7 @@ def run_live(args: argparse.Namespace) -> None:
     last_frame_at: float | None = None
     last_frame_number: int | None = None
     last_status_at = 0.0
+    motive_reachable = False
 
     with UdpJsonBroadcaster(args.broadcast_host, args.broadcast_port) as broadcaster:
         if not args.headless:
@@ -138,6 +147,7 @@ def run_live(args: argparse.Namespace) -> None:
                 ) as client:
                     if not args.no_modeldef_request:
                         model_defs = client.request_model_definitions(timeout=1.0)
+                        motive_reachable = model_defs is not None
                         if model_defs and model_defs.rigid_body_names:
                             names = ", ".join(
                                 f"{name}#{rigid_body_id}"
@@ -157,17 +167,27 @@ def run_live(args: argparse.Namespace) -> None:
                         if frame is None:
                             timed_out = last_frame_at is None or (now - last_frame_at) >= args.motive_timeout
                             if timed_out and (now - last_status_at) >= args.heartbeat_interval:
+                                if motive_reachable:
+                                    state = STATE_NO_FRAME_DATA
+                                    message = (
+                                        "Motive is reachable, but no NatNet frame data is being received. "
+                                        "Check Broadcast Frame Data and Transmission Type in Motive."
+                                    )
+                                else:
+                                    state = STATE_MOTIVE_OFF
+                                    message = "No NatNet command or frame data is being received from Motive."
                                 _send_status(
                                     broadcaster,
                                     args,
-                                    state=STATE_MOTIVE_OFF,
-                                    message="No NatNet frame data is being received from Motive.",
+                                    state=state,
+                                    message=message,
                                     last_frame_at=last_frame_at,
                                     last_frame_number=last_frame_number,
+                                    motive_reachable=motive_reachable,
                                 )
                                 last_status_at = now
                                 if not args.headless:
-                                    print("\rstate=motive_off waiting for Motive frame data".ljust(120), end="", flush=True)
+                                    print(f"\rstate={state} waiting for Motive frame data".ljust(120), end="", flush=True)
                             continue
 
                         last_frame_at = now
@@ -193,6 +213,7 @@ def run_live(args: argparse.Namespace) -> None:
                                 flush=True,
                             )
             except (NatNetError, OSError) as exc:
+                motive_reachable = False
                 now = time.monotonic()
                 if (now - last_status_at) >= args.heartbeat_interval:
                     _send_status(
@@ -202,6 +223,7 @@ def run_live(args: argparse.Namespace) -> None:
                         message=f"NatNet startup error: {exc}",
                         last_frame_at=last_frame_at,
                         last_frame_number=last_frame_number,
+                        motive_reachable=False,
                     )
                     last_status_at = now
                     if not args.headless:

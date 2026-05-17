@@ -124,6 +124,7 @@ python run.py startup uninstall
   "status": {
     "state": "ok",
     "flags": {
+      "motive_reachable": true,
       "motive_receiving": true,
       "object_found": true,
       "tracking_valid": true,
@@ -151,7 +152,8 @@ Positions are in meters. `markers` contains labeled `Heron:Marker ###` points. `
 Status states:
 
 - `ok`: Motive frames are arriving and Heron is tracked.
-- `motive_off`: no NatNet frame data has arrived within `--motive-timeout`.
+- `motive_off`: Motive is not reachable over NatNet.
+- `no_frame_data`: Motive is reachable, but no NatNet frame data has arrived within `--motive-timeout`.
 - `object_not_found`: Motive frames are arriving, but the configured rigid body is missing.
 - `tracking_lost`: the configured rigid body exists in the frame but is not valid/tracked.
 - `startup_error`: the background/live process could not create or use its NatNet sockets and will retry.

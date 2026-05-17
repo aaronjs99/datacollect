@@ -6,6 +6,7 @@ from scripts.packet import (
     SCHEMA,
     PacketValidationError,
     STATE_MOTIVE_OFF,
+    STATE_NO_FRAME_DATA,
     build_heron_packet,
     build_status_packet,
     decode_packet,
@@ -57,6 +58,7 @@ class PacketTests(unittest.TestCase):
         self.assertEqual(packet["device"], "test-device")
         self.assertEqual(packet["frame"], 12)
         self.assertEqual(packet["status"]["state"], "ok")
+        self.assertTrue(packet["status"]["flags"]["motive_reachable"])
         self.assertTrue(packet["status"]["flags"]["motive_receiving"])
         self.assertTrue(packet["status"]["flags"]["object_found"])
         self.assertTrue(packet["heron"]["tracking_valid"])
@@ -120,6 +122,21 @@ class PacketTests(unittest.TestCase):
         self.assertTrue(packet["status"]["flags"]["heartbeat"])
         self.assertEqual(packet["status"]["last_frame_age_ms"], 2500)
         self.assertFalse(packet["heron"]["tracking_valid"])
+
+    def test_status_packet_distinguishes_reachable_motive_without_frames(self):
+        packet = build_status_packet(
+            state=STATE_NO_FRAME_DATA,
+            message="Motive is reachable, but no frame data is being received.",
+            rigid_body_name="Heron",
+            device="test-device",
+            received_at_unix_ns=100,
+            motive_reachable=True,
+        )
+
+        validate_packet(packet)
+        self.assertEqual(packet["status"]["state"], "no_frame_data")
+        self.assertTrue(packet["status"]["flags"]["motive_reachable"])
+        self.assertFalse(packet["status"]["flags"]["motive_receiving"])
 
     def test_marker_set_fallback_when_labeled_markers_are_missing(self):
         frame = NatNetFrame(
