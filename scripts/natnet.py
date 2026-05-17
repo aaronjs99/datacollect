@@ -153,6 +153,21 @@ def _version_at_least(version: tuple[int, int, int, int], major: int, minor: int
     return version[:2] >= (major, minor)
 
 
+def _bundle_end(reader: _Reader, version: tuple[int, int, int, int]) -> int | None:
+    if not _version_at_least(version, 4, 1):
+        return None
+    size = reader.int32()
+    end = reader.offset + size
+    if size < 0 or end > len(reader.data):
+        raise PacketParseError("NatNet bundle size moved past packet end")
+    return end
+
+
+def _finish_bundle(reader: _Reader, end: int | None) -> None:
+    if end is not None:
+        reader.offset = end
+
+
 def _read_rigid_body(
     reader: _Reader,
     version: tuple[int, int, int, int],
@@ -223,51 +238,67 @@ def parse_frame_packet(
 
     marker_sets: list[MarkerSet] = []
     marker_set_count = reader.int32()
+    marker_set_end = _bundle_end(reader, version)
     for _ in range(marker_set_count):
         name = reader.string()
         marker_count = reader.int32()
         marker_sets.append(MarkerSet(name=name, markers=[reader.vec3() for _ in range(marker_count)]))
+    _finish_bundle(reader, marker_set_end)
 
     unlabeled_count = reader.int32()
+    unlabeled_end = _bundle_end(reader, version)
     unlabeled_markers = [
         NatNetMarker(id=index, position=reader.vec3(), label=f"Unlabeled {index}")
         for index in range(unlabeled_count)
     ]
+    _finish_bundle(reader, unlabeled_end)
 
     rigid_body_count = reader.int32()
+    rigid_body_end = _bundle_end(reader, version)
     rigid_bodies = [_read_rigid_body(reader, version, names) for _ in range(rigid_body_count)]
+    _finish_bundle(reader, rigid_body_end)
 
     if _version_at_least(version, 2, 1):
         skeleton_count = reader.int32()
+        skeleton_end = _bundle_end(reader, version)
         for _ in range(skeleton_count):
             reader.int32()
             skeleton_rigid_body_count = reader.int32()
             for _ in range(skeleton_rigid_body_count):
                 _read_rigid_body(reader, version, names)
+        _finish_bundle(reader, skeleton_end)
 
     labeled_markers: list[NatNetMarker] = []
     if _version_at_least(version, 2, 3):
         labeled_marker_count = reader.int32()
+        labeled_marker_end = _bundle_end(reader, version)
         labeled_markers = [
             _read_labeled_marker(reader, version, names) for _ in range(labeled_marker_count)
         ]
+        _finish_bundle(reader, labeled_marker_end)
 
     timestamp: float | None = None
     try:
         if _version_at_least(version, 2, 9):
             force_plate_count = reader.int32()
+            force_plate_end = _bundle_end(reader, version)
             for _ in range(force_plate_count):
                 _skip_device_like_data(reader)
+            _finish_bundle(reader, force_plate_end)
 
         if _version_at_least(version, 3, 0):
             device_count = reader.int32()
+            device_end = _bundle_end(reader, version)
             for _ in range(device_count):
                 _skip_device_like_data(reader)
+            _finish_bundle(reader, device_end)
 
         if _version_at_least(version, 4, 1) and reader.remaining() >= 4:
             asset_count = reader.int32()
+            asset_end = _bundle_end(reader, version)
             for _ in range(asset_count):
                 _skip_asset_data(reader, version)
+            _finish_bundle(reader, asset_end)
 
         if reader.remaining() >= 8:
             reader.uint32()
@@ -353,32 +384,39 @@ def parse_modeldef_packet(
         if reader.remaining() < 4:
             break
         dataset_type = reader.int32()
-        if dataset_type == 0:
-            if _version_at_least(version, 4, 0):
-                reader.int32()
-            name = reader.string()
-            marker_count = reader.int32()
-            marker_set_names[name] = [reader.string() for _ in range(marker_count)]
-        elif dataset_type == 1:
-            rigid_body_id, name = _read_rigid_body_description(reader, version)
-            if name:
-                rigid_body_names[rigid_body_id] = name
-        elif dataset_type == 2:
-            reader.string()
-            reader.int32()
-            rigid_body_count = reader.int32()
-            for _ in range(rigid_body_count):
-                rigid_body_id, name = _read_rigid_body_description(reader, version)
+        dataset_end = _bundle_end(reader, version)
+        try:
+            if dataset_type == 0:
+                name = reader.string()
+                marker_count = reader.int32()
+                marker_set_names[name] = [reader.string() for _ in range(marker_count)]
+            elif dataset_type == 1:
+                if dataset_end is not None:
+                    name = reader.string()
+                    rigid_body_id = reader.int32()
+                else:
+                    rigid_body_id, name = _read_rigid_body_description(reader, version)
                 if name:
                     rigid_body_names[rigid_body_id] = name
-        elif dataset_type == 3:
-            _skip_force_plate_description(reader)
-        elif dataset_type == 4:
-            _skip_device_description(reader)
-        elif dataset_type == 5:
-            _skip_camera_description(reader)
-        else:
-            break
+            elif dataset_type == 2:
+                reader.string()
+                reader.int32()
+                if dataset_end is None:
+                    rigid_body_count = reader.int32()
+                    for _ in range(rigid_body_count):
+                        rigid_body_id, name = _read_rigid_body_description(reader, version)
+                        if name:
+                            rigid_body_names[rigid_body_id] = name
+            elif dataset_type == 3:
+                _skip_force_plate_description(reader)
+            elif dataset_type == 4:
+                _skip_device_description(reader)
+            elif dataset_type == 5:
+                _skip_camera_description(reader)
+            else:
+                break
+        finally:
+            _finish_bundle(reader, dataset_end)
 
     return NatNetModelDefinitions(
         rigid_body_names=rigid_body_names,
