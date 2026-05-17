@@ -316,14 +316,26 @@ def _read_rigid_body_description(
     reader: _Reader,
     version: tuple[int, int, int, int],
 ) -> tuple[int, str]:
-    name = reader.string() if _version_at_least(version, 2, 0) else ""
-    rigid_body_id = reader.int32()
-    reader.int32()
-    reader.vec3()
+    if _version_at_least(version, 4, 0):
+        rigid_body_id = reader.int32()
+        name = reader.string()
+        reader.int32()
+        reader.int32()
+        reader.skip(7 * 4)
+    else:
+        name = reader.string() if _version_at_least(version, 2, 0) else ""
+        rigid_body_id = reader.int32()
+        reader.int32()
+        reader.vec3()
+
     if _version_at_least(version, 3, 0) and reader.remaining() >= 4:
         marker_count = reader.int32()
-        reader.skip(marker_count * 3 * 4)
-        reader.skip(marker_count * 4)
+        if 0 <= marker_count <= 10000:
+            reader.skip(marker_count * 3 * 4)
+            reader.skip(marker_count * 4)
+            if _version_at_least(version, 4, 0):
+                for _ in range(marker_count):
+                    reader.string()
     return rigid_body_id, name
 
 
@@ -342,6 +354,8 @@ def parse_modeldef_packet(
             break
         dataset_type = reader.int32()
         if dataset_type == 0:
+            if _version_at_least(version, 4, 0):
+                reader.int32()
             name = reader.string()
             marker_count = reader.int32()
             marker_set_names[name] = [reader.string() for _ in range(marker_count)]

@@ -19,9 +19,10 @@ class NatNetParserTests(unittest.TestCase):
             [
                 struct.pack("<i", 1),
                 struct.pack("<i", 1),
+                struct.pack("<i", 17),
                 cstr("Heron"),
-                struct.pack("<ii", 17, 0),
-                struct.pack("<fff", 0.0, 0.0, 0.0),
+                struct.pack("<ii", 0, -1),
+                struct.pack("<fffffff", 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
                 struct.pack("<i", 0),
             ]
         )
