@@ -71,6 +71,70 @@ def _run_schtasks(args: list[str]) -> subprocess.CompletedProcess[str]:
     )
 
 
+def _run_powershell(script: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _ps_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _install_scheduled_task(*, task_name: str, trigger: str, launcher: Path) -> subprocess.CompletedProcess[str]:
+    if trigger == "boot":
+        trigger_script = "$trigger = New-ScheduledTaskTrigger -AtStartup"
+        principal_script = (
+            "$principal = New-ScheduledTaskPrincipal "
+            "-UserId 'NT AUTHORITY\\SYSTEM' "
+            "-LogonType ServiceAccount "
+            "-RunLevel Highest"
+        )
+    else:
+        trigger_script = "$trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME"
+        principal_script = (
+            "$principal = New-ScheduledTaskPrincipal "
+            "-UserId $env:USERNAME "
+            "-LogonType Interactive "
+            "-RunLevel Limited"
+        )
+
+    script = "\n".join(
+        [
+            f"$action = New-ScheduledTaskAction -Execute {_ps_literal(str(launcher))}",
+            trigger_script,
+            principal_script,
+            "$settings = New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)",
+            "$task = New-ScheduledTask -Action $action -Trigger $trigger -Principal $principal -Settings $settings",
+            f"Register-ScheduledTask -TaskName {_ps_literal(task_name)} -InputObject $task -Force",
+        ]
+    )
+    return _run_powershell(script)
+
+
+def _uninstall_scheduled_task(task_name: str) -> subprocess.CompletedProcess[str]:
+    return _run_powershell(
+        f"Unregister-ScheduledTask -TaskName {_ps_literal(task_name)} -Confirm:$false"
+    )
+
+
+def _show_scheduled_task(task_name: str) -> subprocess.CompletedProcess[str]:
+    return _run_powershell(
+        f"Get-ScheduledTask -TaskName {_ps_literal(task_name)} | "
+        "Format-List TaskName,TaskPath,State"
+    )
+
+
 def install_task(
     *,
     task_name: str = DEFAULT_TASK_NAME,
@@ -90,23 +154,16 @@ def install_task(
         print(f"Launcher: {launcher}")
         return
 
-    schedule = "ONSTART" if trigger == "boot" else "ONLOGON"
-    result = _run_schtasks(
-        [
-            "/Create",
-            "/TN",
-            task_name,
-            "/TR",
-            f'"{launcher}"',
-            "/SC",
-            schedule,
-            "/F",
-        ]
-    )
+    schedule = "AtStartup" if trigger == "boot" else "AtLogOn"
+    result = _install_scheduled_task(task_name=task_name, trigger=trigger, launcher=launcher)
     if result.returncode != 0:
         raise SystemExit(
             f"Failed to install startup task.\nSTDOUT: {result.stdout}\nSTDERR: {result.stderr}"
         )
+    shortcut = _startup_shortcut_path(task_name)
+    if shortcut.exists():
+        shortcut.unlink()
+        print(f"Removed Startup folder fallback {shortcut}.")
     print(f"Installed {task_name!r} as a Windows {schedule} scheduled task.")
     print(f"Launcher: {launcher}")
 
@@ -117,10 +174,10 @@ def uninstall_task(task_name: str = DEFAULT_TASK_NAME) -> None:
         shortcut.unlink()
         print(f"Removed Startup folder entry {shortcut}.")
 
-    result = _run_schtasks(["/Delete", "/TN", task_name, "/F"])
+    result = _uninstall_scheduled_task(task_name)
     if result.returncode != 0:
         message = (result.stderr or result.stdout).strip()
-        if "cannot find" in message.lower() or "does not exist" in message.lower():
+        if "cannot find" in message.lower() or "no matching" in message.lower() or "does not exist" in message.lower():
             print(f"No Windows scheduled task named {task_name!r} was found.")
             return
         raise SystemExit(f"Failed to uninstall startup task.\nSTDOUT: {result.stdout}\nSTDERR: {result.stderr}")
@@ -134,7 +191,7 @@ def show_status(task_name: str = DEFAULT_TASK_NAME) -> None:
     else:
         print("Startup folder entry: not installed")
 
-    result = _run_schtasks(["/Query", "/TN", task_name, "/V", "/FO", "LIST"])
+    result = _show_scheduled_task(task_name)
     output = (result.stdout or result.stderr).strip()
     if result.returncode != 0:
         if shortcut.exists():
